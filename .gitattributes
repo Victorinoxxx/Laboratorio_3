@@ -1,2 +1,166 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+//----------------------------------------------------------------------------- 
+// Universidad del valle de Guatemala
+// IE2023 Programaciónn de Microcontroladores
+// Autor: Victor Vanegas
+// Proyecto: Laboratorio_3.asm
+// Descripción: Contador de 4 bits con 2 botones, por medio de interrupciones y contador automatico con display 7 segmentos
+// Hardware: ATMega328P 
+// Created: 5/02/2024 22:34:59
+//-----------------------------------------------------------------------------
+// Encabezado
+//-----------------------------------------------------------------------------
+.include "M328PDEF.inc"
+
+.cseg
+.org 0x00
+	JMP MAIN		// Vector RESET
+.org 0x0006			// Vertor de ISR: INT0
+	JMP ISR_INT0
+.org 0x0020			// Vertor de ISR: CONT
+	JMP CONT
+
+MAIN:
+//-----------------------------------------------------------------------------
+// Configuracion de la pila
+//-----------------------------------------------------------------------------
+	LDI R16, LOW(RAMEND) 
+	OUT SPL, R16
+	LDI R17, HIGH(RAMEND) 
+	OUT SPH, R17
+//-----------------------------------------------------------------------------
+// CONFIGURACIÓN
+//-----------------------------------------------------------------------------
+SETUP:
+
+	LDI R16, (1 << CLKPCE) // CLKPCE = 7, corremos 7 veces el 1 en el registro R16
+	STS CLKPR, R16
+	
+	LDI R16, 0b0000_0110
+	STS CLKPR, R16		   // Definiendo un prescaler de 16 fcpu = 1MHz
+
+	// Entradas
+	LDI R16, 0b0000_0011
+	OUT PORTB, R16				// Pull up en los botones
+	LDI R16, 0b0000_1111
+	OUT DDRB, R16				// Asignamos que son entrada y salidas
+	// Salidas
+	LDI R16, 0b0000_1111
+	OUT DDRC, R16				// Asignamos que son salida
+	LDI R16, 0b0111_1111
+	OUT DDRD, R16
+
+	LDI R17, 0x00
+	LDI R18, 0x00
+	LDI R19, 0x00
+	OUT PORTD, R17				// Para poder usar los puerto RX y TX
+	STS UCSR0B, R17
+
+	CALL Init_T0
+
+	LDI R16, 0b0000_0001
+	STS PCICR, R16				// Asignamos que la interrupcion viene del puerto B
+
+	LDI R16, 0b0000_0011		// Especificar que parte del puerto B
+	STS PCMSK0, R16
+	
+	LDI R16, (1 << TOIE0)
+	STS TIMSK0, R16				
+	SEI							// Habilita las interrupciones globales
+
+
+//-----------------------------------------------------------------------------
+// Tabla  de valores
+//-----------------------------------------------------------------------------
+	
+	TABLA7SEG:  .DB 0b0100_0000, 0b0111_1001, 0b0010_0100, 0b0011_0000, 0b0001_1001, 0b0001_0010, 0b0000_0010, 0b0111_1000, 0b0000_0000, 0b0001_1000
+
+//-----------------------------------------------------------------------------
+// LOOP
+//-----------------------------------------------------------------------------
+LOOP:
+
+	LDI ZH, HIGH(TABLA7SEG << 1)        // Asigna el valor bit mas significativo a la tabla
+	LDI ZL, LOW(TABLA7SEG << 1)			// Asigna el valor bit menos significativo a la tabla
+	ADD ZL, R18							// Hace la suma de Z mas R17
+	LPM R16, Z							// El resultado de la suma, saca el registro de la tabla
+	OUT PORTD, R16
+	LDI R20, 0b0000_0111
+	OUT PORTB, R20						
+	LDI R20, 0b0000_0011
+	OUT PORTB, R20
+	
+	LDI ZH, HIGH(TABLA7SEG << 1)        // Asigna el valor bit mas significativo a la tabla
+	LDI ZL, LOW(TABLA7SEG << 1)			// Asigna el valor bit menos significativo a la tabla
+	ADD ZL, R19							// Hace la suma de Z mas R17
+	LPM R16, Z							// El resultado de la suma, saca el registro de la tabla
+	OUT PORTD, R16	
+	LDI R20, 0b0000_1011
+	OUT PORTB, R20						
+	LDI R20, 0b0000_0011
+	OUT PORTB, R20
+
+	RJMP LOOP
+
+//-----------------------------------------------------------------------------
+// Subrutinas (Interrupciones)
+//-----------------------------------------------------------------------------
+
+ISR_INT0:
+	
+	IN R16, SREG
+	PUSH R16			// Guardamos en pila el registro SREG
+
+	IN R16, PINB
+	SBRS R16, PB0		// Si no esta presionado el boton, salta la siguiente instruccion
+	INC R17
+	SBRS R16, PB1		// Si no esta presionado el boton, salta la siguiente instruccion
+	DEC R17
+	OUT PORTC, R17
+
+	POP R16					// Obtener el valor de SREG
+	OUT SREG, R16			// Restaurar los antiguos valores de SREG
+	RETI					// Retorno de la ISR	
+
+CONT:
+	
+	IN R16, SREG
+	PUSH R16			// Guardamos en pila el registro SREG
+
+	SBI TIFR0, TOV0
+
+	INC R18				// Incremeta R18
+	CPI R18, 10
+	BRNE NEXT
+	CLR R18
+	INC R19
+	CPI R19, 6
+	BRNE RESET
+	CLR R19
+	
+	POP R16					// Obtener el valor de SREG
+	OUT SREG, R16			// Restaurar los antiguos valores de SREG
+	RETI
+
+NEXT:
+
+	POP R16					// Obtener el valor de SREG
+	OUT SREG, R16			// Restaurar los antiguos valores de SREG
+	RETI					// Retorno de la ISR
+
+RESET:
+
+	POP R16					// Obtener el valor de SREG
+	OUT SREG, R16			// Restaurar los antiguos valores de SREG
+	RETI					// Retorno de la ISR
+
+//-----------------------------------------------------------------------------
+// Subrutina para inicializar TIMER0
+//-----------------------------------------------------------------------------
+
+Init_T0:
+	LDI R16, (1 << CS02) | (1 << CS00)		// Configura el prescales a 1024
+	OUT TCCR0B, R16
+
+	LDI R16, 5								// Carga el valor de desbordamiento
+	OUT TCNT0, R16							// Carga el valor inicial del contador
+	RET
